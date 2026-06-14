@@ -16,13 +16,18 @@
 <div id="root"></div>
 
 <!-- React / ReactDOM (UMD) -->
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <!-- Babel（ブラウザ内でJSXを変換） -->
-<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.28.4/babel.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef } = React;
+
+// ============ app version ============
+// 更新するたびにここを書き換える（ヘッダーに表示されます）
+const APP_VERSION = "v1.1";
+const APP_VERSION_DATE = "2026.06.14";
 
 // ============ design tokens ============
 // 公園・お出かけの空気。ランチアプリと丸ゴシック体系は揃えつつ配色は明るく。
@@ -593,6 +598,23 @@ function App() {
         await safeSet("kidspots:spots", s);
         await safeSet("kidspots:seededV2", true);
       }
+
+      // 写真の自動同期：ユーザー自身が写真を設定していないスポットは、
+      // 最新のSEEDデータの公式写真を反映する（ユーザーが撮った写真は上書きしない）
+      const seedPhotoMap = new Map(
+        [...SEED, ...SEED_V2].filter((sp) => sp.photo).map((sp) => [sp.id, sp.photo])
+      );
+      let photoUpdated = false;
+      s = s.map((sp) => {
+        const seedPhoto = seedPhotoMap.get(sp.id);
+        if (seedPhoto && sp.photo !== seedPhoto && !sp.photo) {
+          photoUpdated = true;
+          return { ...sp, photo: seedPhoto };
+        }
+        return sp;
+      });
+      if (photoUpdated) await safeSet("kidspots:spots", s);
+
       setSpots(s); setRecords(r); setLoading(false);
     })();
   }, []);
@@ -644,11 +666,16 @@ function App() {
 
       <div style={{ maxWidth: 480, margin: "0 auto", paddingBottom: 86 }}>
         {/* header */}
-        <header style={{ padding: "20px 18px 8px" }}>
-          <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 22, letterSpacing: ".02em" }}>
-            あそびスポット <span style={{ fontSize: 18 }}>🧸</span>
+        <header style={{ padding: "20px 18px 8px", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 22, letterSpacing: ".02em" }}>
+              あそびスポット <span style={{ fontSize: 18 }}>🧸</span>
+            </div>
+            <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>子どもと行ける場所のリストと、おでかけ記録</div>
           </div>
-          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>子どもと行ける場所のリストと、おでかけ記録</div>
+          <div style={{ fontSize: 10.5, color: C.sub, opacity: .7, whiteSpace: "nowrap", paddingTop: 4 }}>
+            {APP_VERSION}<br />{APP_VERSION_DATE}
+          </div>
         </header>
 
         {loading ? (
