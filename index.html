@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>あそびスポット｜福岡市の子どもと遊べる場所メモ</title>
+<meta name="description" content="福岡市内の子どもと遊べるスポット（公園・室内遊び場・児童館・科学館など）を記録・検索できるメモアプリ" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" />
+<style>
+  html, body, #root { margin: 0; padding: 0; min-height: 100%; }
+  body { -webkit-font-smoothing: antialiased; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React / ReactDOM (UMD) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- Babel（ブラウザ内でJSXを変換） -->
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+// ============ design tokens ============
+// 公園・お出かけの空気。ランチアプリと丸ゴシック体系は揃えつつ配色は明るく。
+const C = {
+  bg: "#F2F7F2",        // やわらかい新緑クリーム
+  card: "#FFFFFF",
+  ink: "#24332C",       // 深い松葉色
+  sub: "#71857B",       // かすみ緑
+  line: "#E0EAE2",
+  sun: "#F4A526",       // 陽だまり(主役アクション・お気に入り)
+  sunSoft: "#FDF1DA",
+  open: "#3FA06C",      // 営業中(緑)
+  openSoft: "#E4F2EA",
+  closed: "#C66A53",    // 休み(コーラル)
+  closedSoft: "#F7E6E0",
+  sky: "#4C8FC2",       // 室内(空色)
+  skySoft: "#E4EFF6",
+  leaf: "#6FA84B",      // 屋外(若葉)
+  leafSoft: "#EAF2E0",
+  star: "#E5A52F",
+  insta: "#C2366B",      // Instagramリンク
+  instaSoft: "#FBE6EE",
+};
+
+const FONT_LINK =
+  "https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap";
+
+// 曜日キー（JS getDay: 0=日 .. 6=土）
+const DOW_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DOW_LABEL = { mon: "月", tue: "火", wed: "水", thu: "木", fri: "金", sat: "土", sun: "日", hol: "祝" };
+const DOW_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "hol"];
+
+const CATEGORIES = ["公園", "室内遊び場", "児童館", "水族館・動物園", "ショッピングモール", "プール・水遊び", "図書館・科学館", "テーマパーク", "その他"];
+const ENV_OPTS = [
+  { key: "outdoor", label: "屋外", color: C.leaf, soft: C.leafSoft },
+  { key: "indoor", label: "室内", color: C.sky, soft: C.skySoft },
+  { key: "both", label: "屋内外", color: C.sun, soft: C.sunSoft },
+];
+const AGES = ["乳幼児（0〜6歳）", "0〜2歳", "3〜5歳", "小学生", "全年齢"];
+
+// ジャンルごとのビジュアル（写真が無いときのプレースホルダー）
+const CATEGORY_VISUAL = {
+  "公園": { icon: "🌳", grad: ["#CDE6B0", "#8FBE63"] },
+  "室内遊び場": { icon: "🎠", grad: ["#FBDFB8", "#F0A93E"] },
+  "児童館": { icon: "🧸", grad: ["#F7D9CE", "#E0926F"] },
+  "水族館・動物園": { icon: "🐠", grad: ["#C9E7EF", "#5FA8C4"] },
+  "ショッピングモール": { icon: "🛍", grad: ["#E6DCF3", "#AF93D1"] },
+  "プール・水遊び": { icon: "🏊", grad: ["#C7EEF0", "#4FBFCB"] },
+  "図書館・科学館": { icon: "🔬", grad: ["#DCE2F4", "#8497D6"] },
+  "テーマパーク": { icon: "🎢", grad: ["#FBDDEA", "#EC8FB6"] },
+  "その他": { icon: "📍", grad: ["#E4EAE3", "#A9BBA9"] },
+};
+const catVisual = (category) => CATEGORY_VISUAL[category] || CATEGORY_VISUAL["その他"];
+
+const DOW_JP = ["日", "月", "火", "水", "木", "金", "土"]; // getDay index
+
+const defaultHours = () => {
+  const h = {};
+  DOW_ORDER.forEach((d) => {
+    h[d] = { closed: d === "hol" ? false : false, open: "09:00", close: "17:00" };
+  });
+  return h;
+};
+
+// ============ storage helpers（ブラウザのlocalStorageに保存） ============
+const safeGet = async (key) => {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : null;
+  } catch {
+    return null;
+  }
+};
+const safeSet = async (key, val) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {}
+};
+
+// ============ image compress ============
+const compressImage = (file, maxDim = 1000, quality = 0.62) =>
+  new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        if (w > h && w > maxDim) { h = Math.round((h * maxDim) / w); w = maxDim; }
+        else if (h > maxDim) { w = Math.round((w * maxDim) / h); h = maxDim; }
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(cv.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = () => resolve(null);
+      img.src = e.target.result;
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+
+// ============ time utils ============
+const hmToMin = (hm) => {
+  const [h, m] = (hm || "0:0").split(":").map(Number);
+  return h * 60 + m;
+};
+const todayKey = (holidayMode) => (holidayMode ? "hol" : DOW_KEYS[new Date().getDay()]);
+
+// ============ 日本の祝日（オフライン自動計算） ============
+// 春分・秋分の日：天文計算の近似式（1980〜2099年で実用上十分な精度）
+const vernalEquinoxDay = (y) => Math.floor(20.8431 + 0.242194 * (y - 1980)) - Math.floor((y - 1980) / 4);
+const autumnalEquinoxDay = (y) => Math.floor(23.2488 + 0.242194 * (y - 1980)) - Math.floor((y - 1980) / 4);
+
+// 第n月曜日の「日」を求める（ハッピーマンデー）
+const nthMondayDate = (y, m, n) => {
+  const first = new Date(y, m - 1, 1).getDay(); // 0=日..6=土
+  const firstMon = ((8 - first) % 7) + 1;
+  return firstMon + (n - 1) * 7;
+};
+const dkey = (y, m, d) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+
+// その年の祝日マップを構築（固定祝日＋ハッピーマンデー＋春分秋分＋国民の休日＋振替休日）
+const buildHolidayMap = (y) => {
+  const map = {};
+  [
+    [1, 1, "元日"], [2, 11, "建国記念の日"], [2, 23, "天皇誕生日"],
+    [4, 29, "昭和の日"], [5, 3, "憲法記念日"], [5, 4, "みどりの日"], [5, 5, "こどもの日"],
+    [8, 11, "山の日"], [11, 3, "文化の日"], [11, 23, "勤労感謝の日"],
+    [3, vernalEquinoxDay(y), "春分の日"], [9, autumnalEquinoxDay(y), "秋分の日"],
+  ].forEach(([m, d, name]) => { map[dkey(y, m, d)] = name; });
+  [[1, 2, "成人の日"], [7, 3, "海の日"], [9, 3, "敬老の日"], [10, 2, "スポーツの日"]]
+    .forEach(([m, n, name]) => { map[dkey(y, m, nthMondayDate(y, m, n))] = name; });
+
+  // 国民の休日：前後が祝日に挟まれた、祝日でも日曜でもない平日
+  for (let m = 1; m <= 12; m++) {
+    const dim = new Date(y, m, 0).getDate();
+    for (let d = 1; d <= dim; d++) {
+      const key = dkey(y, m, d);
+      if (map[key]) continue;
+      const date = new Date(y, m - 1, d);
+      if (date.getDay() === 0) continue;
+      const prev = new Date(date); prev.setDate(d - 1);
+      const next = new Date(date); next.setDate(d + 1);
+      const pk = dkey(prev.getFullYear(), prev.getMonth() + 1, prev.getDate());
+      const nk = dkey(next.getFullYear(), next.getMonth() + 1, next.getDate());
+      if (map[pk] && map[nk]) map[key] = "国民の休日";
+    }
+  }
+  // 振替休日：祝日が日曜なら、その後の最初の「祝日でない日」を振替休日に
+  Object.keys(map).sort().forEach((key) => {
+    const d = new Date(key);
+    if (d.getDay() !== 0) return;
+    const next = new Date(d);
+    do { next.setDate(next.getDate() + 1); } while (map[dkey(next.getFullYear(), next.getMonth() + 1, next.getDate())]);
+    map[dkey(next.getFullYear(), next.getMonth() + 1, next.getDate())] = "振替休日";
+  });
+  return map;
+};
+
+const _holidayCache = {};
+const getHolidayInfo = (date) => {
+  const y = date.getFullYear();
+  if (!_holidayCache[y]) _holidayCache[y] = buildHolidayMap(y);
+  const name = _holidayCache[y][dkey(y, date.getMonth() + 1, date.getDate())];
+  return { isHoliday: !!name, name: name || null };
+};
+
+// 第N曜日ルール {w:1..5 または -1(最終), d:0..6} に該当するか
+const matchNth = (date, r) => {
+  if (date.getDay() !== r.d) return false;
+  if (r.w === -1) {
+    const dim = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    return date.getDate() + 7 > dim;
+  }
+  return Math.floor((date.getDate() - 1) / 7) + 1 === r.w;
+};
+const isYearEnd = (date) => (date.getMonth() === 11 && date.getDate() >= 28) || (date.getMonth() === 0 && date.getDate() <= 3);
+
+// スポットの「今日」の状態を返す
+const spotStatus = (spot, holidayMode) => {
+  const d = new Date();
+  if (spot.yearEnd && isYearEnd(d)) return { state: "closed", label: "年末年始休み", hours: null };
+  if ((spot.nthClosed || []).some((r) => matchNth(d, r))) return { state: "closed", label: "本日休み", hours: null };
+  const key = holidayMode ? "hol" : DOW_KEYS[d.getDay()];
+  const slot = spot.hours?.[key];
+  if (!slot || slot.closed) return { state: "closed", label: "本日休み", hours: null };
+  const nowMin = d.getHours() * 60 + d.getMinutes();
+  const o = hmToMin(slot.open), c = hmToMin(slot.close);
+  const hours = `${slot.open}〜${slot.close}`;
+  if (nowMin >= o && nowMin < c) return { state: "open", label: "営業中", hours };
+  if (nowMin < o) return { state: "soon", label: `${slot.open} 開館`, hours };
+  return { state: "after", label: "時間外", hours };
+};
+
+// 定休日のまとめ表示（週次＋第N曜日＋年末年始＋メモ）
+const closedText = (spot) => {
+  const parts = [];
+  const weekly = DOW_ORDER.filter((d) => d !== "hol" && spot.hours?.[d]?.closed).map((d) => DOW_LABEL[d]);
+  if (weekly.length) parts.push(`毎週${weekly.join("・")}曜`);
+  (spot.nthClosed || []).forEach((r) => parts.push(`${r.w === -1 ? "最終" : "第" + r.w}${DOW_JP[r.d]}曜`));
+  if (spot.yearEnd) parts.push("年末年始");
+  if (spot.closedNote) parts.push(spot.closedNote);
+  return parts.length ? parts.join("・") + " 休み" : "無休";
+};
+
+// Googleマップのリンク
+const mapUrl = (spot) =>
+  spot.mapUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${spot.name} ${spot.address || spot.area || ""}`)}`;
+
+// 公式Instagramのリンク（@なしのユーザー名を保存）
+const igUrl = (spot) => (spot.instagram ? `https://www.instagram.com/${spot.instagram.replace(/^@/, "")}/` : null);
+
+const fmtDate = (iso) => {
+  const d = new Date(iso);
+  const w = ["日", "月", "火", "水", "木", "金", "土"][d.getDay()];
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}（${w}）`;
+};
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// ============ 初期データ：福岡市の子どもプラザ ============
+// 出典：福岡市公式サイト（2025年2月時点）。最新情報は各施設HP/Googleマップでご確認を。
+const mkHours = (o, c, closedDows = []) => {
+  const h = {};
+  DOW_ORDER.forEach((d) => { h[d] = { closed: false, open: o, close: c }; });
+  closedDows.forEach((d) => { if (h[d]) h[d].closed = true; });
+  return h;
+};
+const SEED = [
+  { name: "東区香椎子どもプラザ", area: "東区／西鉄香椎すぐ（セピアテラス西鉄香椎2階）", address: "福岡市東区香椎駅前2丁目52-1", tel: "092-663-3263", hours: mkHours("10:00", "16:00", ["mon"]), nthClosed: [{ w: 3, d: 0 }], yearEnd: true, instagram: "kusukusu.kashiikodomopulaza" },
+  { name: "東区三苫子どもプラザ", area: "東区／西鉄三苫駅 徒歩5分", address: "福岡市東区三苫5丁目1-40", tel: "092-692-6267", hours: mkHours("10:00", "16:00", ["wed"]), nthClosed: [{ w: 2, d: 0 }], yearEnd: true },
+  { name: "東区東浜子どもプラザ", area: "東区／ゆめタウン博多2階", address: "福岡市東区東浜1丁目1-1 ゆめタウン博多2F", tel: "092-292-5320", hours: mkHours("10:00", "16:00", ["thu"]), nthClosed: [{ w: 3, d: 5 }], yearEnd: true },
+  { name: "博多区山王子どもプラザ", area: "博多区／博多市民センター併設", address: "福岡市博多区山王1丁目13-10", tel: "092-472-6006", hours: mkHours("10:00", "16:00", ["sun"]), nthClosed: [{ w: -1, d: 1 }], yearEnd: true, instagram: "nikkoriko.sannoukodomopulaza" },
+  { name: "博多南子どもプラザ", area: "博多区／JR南福岡駅 徒歩6分", address: "福岡市博多区竹丘町1丁目4-11", tel: "092-592-9711", hours: mkHours("10:00", "16:00", ["sat"]), nthClosed: [{ w: 4, d: 5 }], yearEnd: true },
+  { name: "中央区子どもプラザ", area: "中央区／天神 徒歩10分（中央児童会館5階）", address: "福岡市中央区今泉1丁目19-22", tel: "092-741-3564", hours: mkHours("9:00", "18:00", ["mon"]), nthClosed: [], yearEnd: true, closedNote: "毎月末日・月曜が祝日の場合は翌日" },
+  { name: "南区おおはし子どもプラザ", area: "南区／西鉄大橋駅 徒歩10分（南市民センター併設）", address: "福岡市南区塩原2丁目8-2", tel: "092-511-3561", hours: mkHours("9:00", "18:00", ["mon"]), nthClosed: [], yearEnd: true },
+  { name: "南区ひばる子どもプラザ", area: "南区／桧原三ツ角 徒歩2分", address: "福岡市南区桧原2丁目36-15", tel: "092-555-6565", hours: mkHours("10:00", "16:00", ["sun"]), nthClosed: [{ w: 1, d: 6 }], yearEnd: true },
+  { name: "城南区子どもプラザ", area: "城南区／地下鉄別府駅 徒歩3分（城南区役所別館2階）", address: "福岡市城南区鳥飼5丁目2-25", tel: "092-831-4212", hours: mkHours("10:00", "16:00", ["sat"]), nthClosed: [{ w: -1, d: 1 }], yearEnd: true, instagram: "jyounanpuraza" },
+  { name: "早良区西南子どもプラザ", area: "早良区／地下鉄西新駅 徒歩6分（西南学院 百年館2階）", address: "福岡市早良区西新3丁目13-1", tel: "092-846-9207", hours: mkHours("10:00", "16:00", ["sun"]), nthClosed: [{ w: 1, d: 1 }], yearEnd: true, closedNote: "お盆(8/13-15)・12/25", instagram: "sw_childrenplaza" },
+  { name: "早良区次郎丸中子どもプラザ", area: "早良区／地下鉄賀茂駅 徒歩5分（次郎丸中学校内）", address: "福岡市早良区次郎丸6丁目3-1", tel: "092-862-3752", hours: mkHours("10:00", "16:00", ["sat"]), nthClosed: [{ w: -1, d: 5 }], yearEnd: true, closedNote: "お盆(8/8-15)", instagram: "shinwahoikuen" },
+  { name: "西区姪浜子どもプラザ", area: "西区／地下鉄姪浜駅 徒歩3分", address: "福岡市西区姪の浜4丁目8-28", tel: "092-882-7532", hours: mkHours("10:00", "16:00", ["sun"]), nthClosed: [{ w: -1, d: 2 }], yearEnd: true },
+  { name: "西区徳永子どもプラザ", area: "西区／JR九大学研都市駅 徒歩3分（イオンモール福岡伊都3階）", address: "福岡市西区北原1丁目2-1", tel: "092-806-4733", hours: mkHours("10:00", "16:00", ["mon"]), nthClosed: [{ w: -1, d: 4 }], yearEnd: true },
+  { name: "西区橋本子どもプラザ", area: "西区／地下鉄橋本駅すぐ（木の葉モール橋本2階）", address: "福岡市西区橋本2丁目27-2", tel: "092-407-2862", hours: mkHours("10:00", "16:00", ["wed"]), nthClosed: [{ w: -1, d: 5 }], yearEnd: true },
+].map((s, i) => ({
+  id: "seed-" + i,
+  category: "児童館",
+  env: "indoor",
+  age: "乳幼児（0〜6歳）",
+  memo: "0〜6歳の乳幼児と保護者向け。無料・予約不要。大人は靴下を持参。",
+  url: "",
+  mapUrl: "",
+  instagram: "",
+  photo: null,
+  fav: false,
+  closedNote: "",
+  ...s,
+}));
+
+// ============ 追加データ：商業施設・文化施設の子ども向けスポット ============
+// 出典：各施設公式サイト・Instagram（2026年6月時点）。営業時間・定休日は変更されることがあります。
+const SEED_V2 = [
+  // 博多区・ららぽーと福岡／キャナルシティ／博多リバレイン
+  { name: "キッザニア福岡", category: "テーマパーク", env: "indoor", age: "小学生",
+    area: "博多区／ららぽーと福岡 キッザニア棟2F", address: "福岡市博多区那珂6丁目23-1 ららぽーと福岡 キッザニア棟2F",
+    tel: "050-3188-5352", instagram: "kidzaniajapan",
+    hours: mkHours("9:00", "20:00"), closedNote: "完全予約制。平日9:00-17:00／休日は第1部9:00-14:30・第2部15:30-20:00の二部制",
+    memo: "こどもが主役の街で約70種類の仕事体験。3〜15歳対象、要事前予約。" },
+
+  { name: "福岡おもちゃ美術館", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "博多区／ららぽーと福岡 オーバルパーク1F", address: "福岡市博多区那珂6丁目23-1 ららぽーと福岡 オーバルパーク1F",
+    tel: "092-558-1903", instagram: "fukuokatoymuseum",
+    hours: mkHours("10:00", "17:00", ["thu"]),
+    closedNote: "木曜が祝日の場合は開館・翌日振替休館／メンテナンス休館年2回／ららぽーと休館日に準ずる",
+    memo: "福岡県産ヒノキを敷いた館内で木のおもちゃ約8,000点。2歳以下専用「赤ちゃん木育ひろば」あり。事前予約制・有料。" },
+
+  { name: "VS PARK WITH G ららぽーと福岡店", category: "室内遊び場", env: "indoor", age: "小学生",
+    area: "博多区／ららぽーと福岡 モール棟4F", address: "福岡市博多区那珂6丁目23-1 ららぽーと福岡 モール棟4F",
+    tel: "0570-086-135",
+    hours: mkHours("10:00", "21:00"),
+    closedNote: "ららぽーと福岡の休館日に準ずる",
+    memo: "体を動かすバラエティスポーツ27種類を体験できる屋内パーク。" },
+
+  { name: "スキッズガーデン キャナルシティ博多店", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "博多区／キャナルシティ博多 ビジネスセンタービルB1F", address: "福岡市博多区住吉1丁目2-25 キャナルシティ博多 ビジネスセンタービルB1F",
+    tel: "080-4886-2924", instagram: "skidsgarden",
+    hours: mkHours("10:00", "21:00"),
+    closedNote: "定休日なし（最終入場20:00）",
+    memo: "0歳〜小学2年生対象の時間制プレイグラウンド。3歳以上は子どものみ入場可。" },
+
+  { name: "福岡アンパンマンこどもミュージアム in モール", category: "テーマパーク", env: "indoor", age: "全年齢",
+    area: "博多区／博多リバレインモール5・6F", address: "福岡市博多区下川端町3-1 博多リバレインモール5・6F",
+    tel: "092-291-8855", instagram: "fukuoka_anpanman",
+    hours: mkHours("10:00", "17:00"), yearEnd: true,
+    closedNote: "年末年始（12/31・1/1）以外は基本無休／臨時休業の場合あり",
+    memo: "九州唯一のアンパンマンミュージアム。1歳以上有料、最終入館16:00。" },
+
+  { name: "こどもひろば どれみ フォレオ博多店", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "博多区／フォレオ博多2F", address: "福岡市博多区東那珂1丁目14-46 フォレオ博多2F",
+    tel: "092-414-3305",
+    hours: { mon: { closed: false, open: "10:00", close: "19:00" }, tue: { closed: false, open: "10:00", close: "19:00" }, wed: { closed: false, open: "10:00", close: "19:00" }, thu: { closed: false, open: "10:00", close: "19:00" }, fri: { closed: false, open: "10:00", close: "19:00" }, sat: { closed: false, open: "9:00", close: "19:00" }, sun: { closed: false, open: "9:00", close: "19:00" }, hol: { closed: false, open: "9:00", close: "19:00" } },
+    yearEnd: true, closedNote: "1月1日休み／年末は短縮営業の場合あり",
+    memo: "0〜12歳対象、0〜3歳専用の乳幼児エリアあり。ボールプール・トランポリン・ジャングル迷路など。" },
+
+  // 東区
+  { name: "きっずゆうえんち＆アミューズメント ぐるぐる屋箱崎店", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "東区／ボックスタウン箱崎2F", address: "福岡市東区箱崎4丁目7-55 ボックスタウン箱崎2F スーパーセカンドストリート内",
+    tel: "", hours: mkHours("10:00", "21:00"),
+    closedNote: "営業時間・定休日は変更される場合あり、来店前に公式情報をご確認ください",
+    memo: "抗菌砂場・ジャングルジム・ボールプール・ふわふわ遊具・漫画読み放題コーナーあり。" },
+
+  { name: "モーリーファンタジー香椎浜店 わいわいぱーく", category: "室内遊び場", env: "indoor", age: "乳幼児（0〜6歳）",
+    area: "東区／イオン香椎浜店2F", address: "福岡市東区香椎浜3丁目12-1 イオン香椎浜店2F",
+    tel: "070-3100-3943", instagram: "mollyfantasy_jp",
+    hours: mkHours("10:00", "18:00"),
+    closedNote: "わいわいぱーくは10:00〜18:00（最終受付17:30）。イオン店舗の休館日に準ずる",
+    memo: "0歳〜小学2年生向けキッズスペース。0歳・保護者は無料。" },
+
+  { name: "キッズランドUS 福岡アイランドアイ店", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "東区／アイランドアイ2F", address: "福岡市東区香椎照葉6丁目6-6 アイランドアイ2F",
+    tel: "", instagram: "kids.usland_official",
+    hours: mkHours("10:00", "18:00"),
+    memo: "スーパージャングルジム・ボールプール・巨大わくわく迷路・ゲーム機フリープレイ。出入り自由・飲食持込OK。" },
+
+  // 西区
+  { name: "スキッズガーデン 福岡伊都店", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "西区／イオンモール福岡伊都3F", address: "福岡市西区北原1丁目2-1 イオンモール福岡伊都 イオン福岡伊都店3F",
+    tel: "070-3100-4066", instagram: "skidsgarden",
+    hours: mkHours("10:00", "18:00"),
+    closedNote: "閉店30分前受付終了。イオンモールの休館日に準ずる",
+    memo: "0歳〜小学2年生対象。3歳以上は子どものみ入場可。" },
+
+  { name: "モーリーファンタジー マリナタウン店 わいわいぱーく", category: "室内遊び場", env: "indoor", age: "乳幼児（0〜6歳）",
+    area: "西区／イオンショッパーズモールマリナタウン2F", address: "福岡市西区豊浜3丁目1-10 イオンショッパーズモールマリナタウン2F",
+    tel: "", instagram: "mollyfantasy_jp",
+    hours: mkHours("10:00", "18:00"),
+    closedNote: "わいわいぱーくは10:00〜18:00（最終受付17:30）。イオン店舗の休館日に準ずる",
+    memo: "0歳〜小学2年生向けキッズスペース。0歳・保護者は無料。" },
+
+  { name: "NOBOLT（ノボルト）", category: "室内遊び場", env: "indoor", age: "全年齢",
+    area: "西区／旧マリノアシティ福岡敷地内", address: "福岡市西区小戸2丁目10-76",
+    tel: "", instagram: "nobolt_taito",
+    hours: { mon: { closed: false, open: "11:00", close: "20:00" }, tue: { closed: false, open: "11:00", close: "20:00" }, wed: { closed: false, open: "11:00", close: "20:00" }, thu: { closed: false, open: "11:00", close: "20:00" }, fri: { closed: false, open: "11:00", close: "20:00" }, sat: { closed: false, open: "10:00", close: "20:00" }, sun: { closed: false, open: "10:00", close: "20:00" }, hol: { closed: false, open: "10:00", close: "20:00" } },
+    nthClosed: [{ w: 2, d: 4 }],
+    closedNote: "最終入場は閉場2時間前。定休日は変更の場合あり",
+    memo: "国内最大級の屋内アスレチック・クライミング。小さい子向け「ベビーアイランド」あり、小学生以下は保護者同伴。" },
+
+  // 中央区
+  { name: "あそびパークPLUS マークイズ福岡ももち店", category: "室内遊び場", env: "indoor", age: "乳幼児（0〜6歳）",
+    area: "中央区／MARK IS 福岡ももち3F", address: "福岡市中央区地行浜2丁目2-1 MARK IS 福岡ももち3F",
+    tel: "", hours: mkHours("10:00", "19:00"),
+    memo: "屋内砂浜・西鉄バス＆電車の乗り物体験・トランポリンなど7ゾーン。6ヶ月〜12歳、ベビーテラスあり。" },
+
+  { name: "福岡市科学館", category: "図書館・科学館", env: "indoor", age: "全年齢",
+    area: "中央区／地下鉄七隈線「六本松」駅すぐ", address: "福岡市中央区六本松4丁目2-1",
+    tel: "092-731-2525", instagram: "fukuokacity_sm",
+    hours: mkHours("9:30", "18:00", ["tue"]), yearEnd: true,
+    closedNote: "火曜が祝日の場合は翌平日休館／春休み・GW・夏休み・冬休み期間は毎日開館／全館9:30-21:30、基本展示室は18:00まで",
+    memo: "5階「おやこひろば」など小さな子向けの展示も。ドームシアター(プラネタリウム)あり。" },
+
+  { name: "福岡市美術館", category: "図書館・科学館", env: "indoor", age: "全年齢",
+    area: "中央区／大濠公園内", address: "福岡市中央区大濠公園1-6",
+    tel: "092-714-6051", instagram: "fukuokaartmuseum",
+    hours: mkHours("9:30", "17:30", ["mon"]), yearEnd: true,
+    closedNote: "月曜が祝休日の場合は翌平日休館／7〜10月の金土は20:00まで開館",
+    memo: "公式「キッズスペース」あり。コレクション展は中学生以下無料。" },
+
+  // 早良区
+  { name: "福岡市博物館", category: "図書館・科学館", env: "indoor", age: "全年齢",
+    area: "早良区／百道浜", address: "福岡市早良区百道浜3丁目1-1",
+    tel: "092-845-5011",
+    hours: mkHours("9:30", "17:30", ["mon"]), yearEnd: true,
+    closedNote: "月曜が祝休日の場合は翌平日休館／7/24〜8/23の金土日祝と8/13は20:00まで開館",
+    memo: "アジア各国の玩具で遊べる体験学習室あり。国宝「金印」常設展示。" },
+
+  // 動植物園（中央区）
+  { name: "福岡市動植物園", category: "水族館・動物園", env: "both", age: "全年齢",
+    area: "中央区／南公園", address: "福岡市中央区南公園1-1",
+    tel: "092-531-1968", instagram: "fukuokazoo",
+    hours: mkHours("9:00", "17:00", ["mon"]), yearEnd: true,
+    closedNote: "祝日の場合は翌日休園／年始年末（12/29〜1/1）",
+    memo: "こども動物園・ZooLab・展望台キッズテラスあり。中学生以下無料。" },
+].map((s, i) => ({
+  id: "seed2-" + i,
+  url: "",
+  mapUrl: "",
+  instagram: "",
+  photo: null,
+  fav: false,
+  closedNote: "",
+  nthClosed: [],
+  yearEnd: false,
+  ...s,
+}));
+
+// ============ small components ============
+function Stars({ value = 0, size = 16, onChange }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 2 }}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <span
+          key={n}
+          onClick={onChange ? (e) => { e.stopPropagation(); onChange(n); } : undefined}
+          style={{ cursor: onChange ? "pointer" : "default", color: n <= value ? C.star : "#DCE3DD", fontSize: size, lineHeight: 1 }}
+        >★</span>
+      ))}
+    </div>
+  );
+}
+
+function StatusBadge({ s, overlay }) {
+  const map = {
+    open: { bg: C.openSoft, fg: C.open },
+    soon: { bg: C.sunSoft, fg: C.sun },
+    after: { bg: "#EEF2EE", fg: C.sub },
+    closed: { bg: C.closedSoft, fg: C.closed },
+  };
+  const st = map[s.state];
+  return (
+    <span style={{
+      background: overlay ? "rgba(255,255,255,.92)" : st.bg, color: st.fg, fontWeight: 700, fontSize: 12,
+      padding: "4px 10px", borderRadius: 999, whiteSpace: "nowrap",
+      boxShadow: overlay ? "0 1px 4px rgba(36,51,44,.18)" : "none",
+    }}>
+      {s.state === "open" ? "● " : ""}{s.label}
+    </span>
+  );
+}
+
+function EnvTag({ env, overlay }) {
+  const o = ENV_OPTS.find((e) => e.key === env) || ENV_OPTS[0];
+  return (
+    <span style={{
+      background: overlay ? "rgba(255,255,255,.92)" : o.soft, color: o.color, fontSize: 11, fontWeight: 700,
+      padding: "3px 8px", borderRadius: 6, boxShadow: overlay ? "0 1px 4px rgba(36,51,44,.18)" : "none",
+    }}>{o.label}</span>
+  );
+}
+
+// Googleマップ公式アイコン風のロゴ（角丸スクエアの地図＋赤いピン）
+function GoogleMapsIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+      <defs>
+        <clipPath id="gmClip">
+          <rect x="0" y="0" width="24" height="24" rx="5" />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#gmClip)">
+        <rect x="0" y="0" width="24" height="24" fill="#D7D9F0" />
+        <path d="M0 0H22L0 14Z" fill="#34A853" />
+        <path d="M9 24H24L13 13Z" fill="#4A86F7" />
+        <path d="M21.5 0L0 17.5V21.5L24 3.5V0Z" fill="#FBBC04" />
+        <path d="M24 5L6 24H10L24 12Z" fill="#F5F5FB" />
+      </g>
+      <circle cx="7" cy="6.4" r="3.1" fill="none" stroke="#FFFFFF" strokeWidth="1.9" strokeDasharray="14.5 5" strokeDashoffset="-4" />
+      <line x1="7" y1="6.4" x2="9.6" y2="6.4" stroke="#FFFFFF" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M16 8.3C13.5 8.3 11.5 10.2 11.5 12.6C11.5 15.7 16 20.3 16 20.3C16 20.3 20.5 15.7 20.5 12.6C20.5 10.2 18.5 8.3 16 8.3Z" fill="#EA4335" />
+      <circle cx="16" cy="12.4" r="1.9" fill="#9E2A1E" />
+    </svg>
+  );
+}
+
+
+function InstagramIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+      <defs>
+        <linearGradient id="igGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#FFDD55" />
+          <stop offset="35%" stopColor="#FF543E" />
+          <stop offset="65%" stopColor="#C837AB" />
+          <stop offset="100%" stopColor="#3F51E1" />
+        </linearGradient>
+      </defs>
+      <path fillRule="evenodd" clipRule="evenodd" fill="url(#igGrad)"
+        d="M6 1H18A5 5 0 0 1 23 6V18A5 5 0 0 1 18 23H6A5 5 0 0 1 1 18V6A5 5 0 0 1 6 1Z
+           M6 3A3 3 0 0 0 3 6V18A3 3 0 0 0 6 21H18A3 3 0 0 0 21 18V6A3 3 0 0 0 18 3Z" />
+      <path fillRule="evenodd" clipRule="evenodd" fill="url(#igGrad)"
+        d="M12 7.3A4.7 4.7 0 1 1 12 16.7A4.7 4.7 0 1 1 12 7.3Z
+           M12 9.3A2.7 2.7 0 1 0 12 14.7A2.7 2.7 0 1 0 12 9.3Z" />
+      <circle cx="18.2" cy="5.8" r="1.3" fill="url(#igGrad)" />
+    </svg>
+  );
+}
+
+// 写真エリア：写真があれば表示、なければジャンル別のグラデーション＋アイコン
+// status / fav / env のバッジを写真の上に重ねて表示できる
+function PhotoArea({ spot, height = 150, status, onToggleFav, showEnv }) {
+  const v = catVisual(spot.category);
+  return (
+    <div style={{ position: "relative", height, overflow: "hidden", background: spot.photo ? "#000" : `linear-gradient(135deg, ${v.grad[0]}, ${v.grad[1]})` }}>
+      {spot.photo ? (
+        <img src={spot.photo} alt={spot.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+      ) : (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: height * 0.4, opacity: .9 }}>{v.icon}</div>
+      )}
+
+      {/* top row: env tag + fav */}
+      <div style={{ position: "absolute", top: 8, left: 8, right: 8, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        {showEnv ? <EnvTag env={spot.env} overlay /> : <span />}
+        {onToggleFav && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleFav(spot.id); }}
+            style={{
+              width: 30, height: 30, borderRadius: 999, border: "none", cursor: "pointer",
+              background: "rgba(255,255,255,.92)", color: spot.fav ? C.sun : "#C8D1CA",
+              fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 1px 4px rgba(36,51,44,.18)",
+            }}
+          >★</button>
+        )}
+      </div>
+
+      {/* bottom row: status */}
+      {status && (
+        <div style={{ position: "absolute", bottom: 8, left: 8 }}>
+          <StatusBadge s={status} overlay />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Empty({ icon, title, body }) {
+  return (
+    <div style={{ textAlign: "center", padding: "56px 24px", color: C.sub }}>
+      <div style={{ fontSize: 40, marginBottom: 10 }}>{icon}</div>
+      <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 700, color: C.ink, fontSize: 16 }}>{title}</div>
+      <div style={{ fontSize: 13, marginTop: 6, lineHeight: 1.7 }}>{body}</div>
+    </div>
+  );
+}
+
+// ============ main ============
+function App() {
+  const [tab, setTab] = useState("today");
+  const [spots, setSpots] = useState([]);
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [envFilter, setEnvFilter] = useState("all"); // all/indoor/outdoor
+  const [favOnly, setFavOnly] = useState(false);
+  const [openOnly, setOpenOnly] = useState(true);
+
+  const [spotEditor, setSpotEditor] = useState(null); // spot object or null
+  const [recordEditor, setRecordEditor] = useState(null);
+  const [picked, setPicked] = useState(null); // おまかせ結果
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    (async () => {
+      const seeded = await safeGet("kidspots:seeded");
+      const seededV2 = await safeGet("kidspots:seededV2");
+      let s = (await safeGet("kidspots:spots")) || [];
+      const r = (await safeGet("kidspots:records")) || [];
+      if (!seeded && s.length === 0) {
+        s = [...SEED, ...SEED_V2];
+        await safeSet("kidspots:spots", s);
+        await safeSet("kidspots:seeded", true);
+        await safeSet("kidspots:seededV2", true);
+      } else if (!seededV2) {
+        const existingIds = new Set(s.map((sp) => sp.id));
+        const toAdd = SEED_V2.filter((sp) => !existingIds.has(sp.id));
+        s = [...s, ...toAdd];
+        await safeSet("kidspots:spots", s);
+        await safeSet("kidspots:seededV2", true);
+      }
+      setSpots(s); setRecords(r); setLoading(false);
+    })();
+  }, []);
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const holidayInfo = getHolidayInfo(now);
+  const holidayMode = holidayInfo.isHoliday;
+
+  const saveSpots = (next) => { setSpots(next); safeSet("kidspots:spots", next); };
+  const saveRecords = (next) => { setRecords(next); safeSet("kidspots:records", next); };
+
+  // ---- today view filtering ----
+  const matchesEnv = (sp) => envFilter === "all" || sp.env === envFilter || (sp.env === "both");
+  const todaySpots = spots
+    .map((sp) => ({ sp, st: spotStatus(sp, holidayMode) }))
+    .filter(({ sp }) => matchesEnv(sp))
+    .filter(({ sp }) => (favOnly ? sp.fav : true))
+    .filter(({ st }) => (openOnly ? st.state === "open" : true))
+    .sort((a, b) => {
+      const rank = { open: 0, soon: 1, after: 2, closed: 3 };
+      if (rank[a.st.state] !== rank[b.st.state]) return rank[a.st.state] - rank[b.st.state];
+      return (b.sp.fav ? 1 : 0) - (a.sp.fav ? 1 : 0);
+    });
+
+  const omakase = () => {
+    const pool = todaySpots.filter(({ st }) => st.state === "open" || st.state === "soon");
+    const list = pool.length ? pool : todaySpots;
+    if (!list.length) { setPicked({ none: true }); return; }
+    setPicked(list[Math.floor(Math.random() * list.length)].sp);
+  };
+
+  const toggleFav = (id) => saveSpots(spots.map((s) => (s.id === id ? { ...s, fav: !s.fav } : s)));
+  const deleteSpot = (id) => { if (confirm("このスポットを削除しますか？")) saveSpots(spots.filter((s) => s.id !== id)); };
+  const deleteRecord = (id) => { if (confirm("この記録を削除しますか？")) saveRecords(records.filter((r) => r.id !== id)); };
+
+  const recordsForSpot = (id) => records.filter((r) => r.spotId === id).length;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: C.ink }}>
+      <style>{`@import url('${FONT_LINK}');
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        input, select, textarea { font-family: inherit; }
+        @media (prefers-reduced-motion: no-preference){ .pop{ animation: pop .25s ease; } }
+        @keyframes pop { from{ transform: scale(.96); opacity:.4 } to{ transform: scale(1); opacity:1 } }
+      `}</style>
+
+      <div style={{ maxWidth: 480, margin: "0 auto", paddingBottom: 86 }}>
+        {/* header */}
+        <header style={{ padding: "20px 18px 8px" }}>
+          <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 22, letterSpacing: ".02em" }}>
+            あそびスポット <span style={{ fontSize: 18 }}>🧸</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>子どもと行ける場所のリストと、おでかけ記録</div>
+        </header>
+
+        {loading ? (
+          <div style={{ padding: 60, textAlign: "center", color: C.sub }}>よみこみ中…</div>
+        ) : (
+          <main style={{ padding: "8px 14px 0" }}>
+            {tab === "today" && (
+              <TodayView
+                now={now} holidayMode={holidayMode} holidayInfo={holidayInfo}
+                envFilter={envFilter} setEnvFilter={setEnvFilter}
+                favOnly={favOnly} setFavOnly={setFavOnly} onToggleFav={toggleFav}
+                openOnly={openOnly} setOpenOnly={setOpenOnly}
+                list={todaySpots} omakase={omakase} picked={picked} clearPick={() => setPicked(null)}
+                onGo={(sp) => setRecordEditor({ spotId: sp.id, name: sp.name, date: todayISO(), rating: 0, comment: "", photo: null })}
+                goAddSpot={() => setTab("spots")}
+                hasSpots={spots.length > 0}
+              />
+            )}
+
+            {tab === "spots" && (
+              <SpotsView
+                spots={spots} holidayMode={holidayMode}
+                onAdd={() => setSpotEditor({ id: null, name: "", category: CATEGORIES[0], env: "outdoor", area: "", address: "", tel: "", url: "", mapUrl: "", instagram: "", age: "全年齢", memo: "", photo: null, fav: false, hours: defaultHours(), nthClosed: [], yearEnd: false, closedNote: "" })}
+                onEdit={(sp) => setSpotEditor({ ...sp, hours: sp.hours || defaultHours() })}
+                onDelete={deleteSpot} onToggleFav={toggleFav} recordsCount={recordsForSpot}
+              />
+            )}
+
+            {tab === "records" && (
+              <RecordsView
+                records={records} spots={spots}
+                onAdd={() => setRecordEditor({ spotId: spots[0]?.id || "", name: spots[0]?.name || "", date: todayISO(), rating: 0, comment: "", photo: null })}
+                onDelete={deleteRecord}
+              />
+            )}
+          </main>
+        )}
+      </div>
+
+      {/* bottom nav */}
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(255,255,255,.94)", backdropFilter: "blur(8px)", borderTop: `1px solid ${C.line}`, display: "flex", justifyContent: "center" }}>
+        <div style={{ display: "flex", width: "100%", maxWidth: 480 }}>
+          {[
+            { k: "today", ic: "📍", l: "きょう" },
+            { k: "spots", ic: "🗂", l: "スポット" },
+            { k: "records", ic: "📷", l: "きろく" },
+          ].map((t) => (
+            <button key={t.k} onClick={() => setTab(t.k)} style={{
+              flex: 1, background: "none", border: "none", padding: "10px 0 12px", cursor: "pointer",
+              color: tab === t.k ? C.ink : C.sub,
+            }}>
+              <div style={{ fontSize: 20, filter: tab === t.k ? "none" : "grayscale(.4) opacity(.7)" }}>{t.ic}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, fontFamily: "'Zen Maru Gothic'" }}>{t.l}</div>
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      {spotEditor && (
+        <SpotEditor
+          init={spotEditor} onClose={() => setSpotEditor(null)}
+          onSave={(sp) => {
+            if (sp.id) saveSpots(spots.map((s) => (s.id === sp.id ? sp : s)));
+            else saveSpots([{ ...sp, id: uid() }, ...spots]);
+            setSpotEditor(null);
+          }}
+        />
+      )}
+
+      {recordEditor && (
+        <RecordEditor
+          init={recordEditor} spots={spots} onClose={() => setRecordEditor(null)}
+          onSave={(rec) => { saveRecords([{ ...rec, id: uid() }, ...records]); setRecordEditor(null); setTab("records"); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============ Today ============
+function TodayView({ now, holidayMode, holidayInfo, envFilter, setEnvFilter, favOnly, setFavOnly, openOnly, setOpenOnly, list, omakase, picked, clearPick, onGo, onToggleFav, goAddSpot, hasSpots }) {
+  const w = ["日", "月", "火", "水", "木", "金", "土"][now.getDay()];
+  const dateStr = `${now.getMonth() + 1}月${now.getDate()}日（${holidayMode ? "祝" : w}）`;
+  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+  return (
+    <div>
+      {/* 日時ボード */}
+      <div style={{ background: C.ink, color: "#fff", borderRadius: 18, padding: "16px 18px", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 12.5, opacity: .75 }}>きょうは</div>
+          <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 22 }}>{dateStr} <span style={{ fontSize: 16, opacity: .85 }}>{timeStr}</span></div>
+          {holidayInfo.isHoliday && (
+            <div style={{ display: "inline-block", marginTop: 6, background: C.sun, color: "#3a2a07", borderRadius: 999, padding: "4px 11px", fontSize: 11.5, fontWeight: 700 }}>🎌 {holidayInfo.name}（祝日）</div>
+          )}
+        </div>
+      </div>
+
+      {/* おまかせ */}
+      <button onClick={omakase} style={{
+        width: "100%", background: C.sun, color: "#3a2a07", border: "none", borderRadius: 14,
+        padding: "13px", fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 16, cursor: "pointer", marginBottom: 10,
+        boxShadow: "0 3px 0 #d98c12",
+      }}>🎲 今日はここ、で決めちゃう</button>
+
+      {picked && (
+        <div className="pop" style={{ background: picked.none ? C.closedSoft : C.sunSoft, border: `1.5px solid ${picked.none ? C.closed : C.sun}`, borderRadius: 14, padding: "12px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          {picked.none ? (
+            <span style={{ fontSize: 13.5, color: C.closed }}>条件に合うスポットがありません。絞り込みをゆるめてみてください。</span>
+          ) : (
+            <>
+              <div style={{ width: 56, height: 56, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
+                <PhotoArea spot={picked} height={56} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11.5, color: C.sub }}>きょうのおすすめ</div>
+                <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 18 }}>{picked.name}</div>
+                <div style={{ fontSize: 12, color: C.sub, marginTop: 1 }}>{picked.area}</div>
+              </div>
+              <button onClick={() => onGo(picked)} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 10, padding: "9px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>ここに行く</button>
+            </>
+          )}
+          <button onClick={clearPick} style={{ background: "none", border: "none", color: C.sub, cursor: "pointer", fontSize: 18, alignSelf: "flex-start" }}>×</button>
+        </div>
+      )}
+
+      {/* filters */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {[{ k: "all", l: "すべて" }, { k: "outdoor", l: "屋外" }, { k: "indoor", l: "室内" }].map((f) => (
+          <Chip key={f.k} active={envFilter === f.k} onClick={() => setEnvFilter(f.k)}>{f.l}</Chip>
+        ))}
+        <Chip active={openOnly} onClick={() => setOpenOnly(!openOnly)}>営業中だけ</Chip>
+        <Chip active={favOnly} onClick={() => setFavOnly(!favOnly)}>★お気に入り</Chip>
+      </div>
+
+      {!hasSpots ? (
+        <Empty icon="🗂" title="まずはスポットを登録" body="「スポット」タブで、よく行く公園や室内遊び場を追加しておくと、ここに今日行ける場所が並びます。" />
+      ) : list.length === 0 ? (
+        <Empty icon="🌧" title="今の条件だと候補なし" body="「営業中だけ」をオフにするか、絞り込みを変えてみてください。" />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {list.map(({ sp, st }) => (
+            <div key={sp.id} style={{ background: C.card, borderRadius: 16, border: `1.5px solid ${C.line}`, overflow: "hidden", opacity: st.state === "closed" ? .6 : 1 }}>
+              <PhotoArea spot={sp} height={150} status={st} onToggleFav={onToggleFav} showEnv />
+              <div style={{ padding: 14 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 700, fontSize: 16.5 }}>{sp.name}</span>
+                  <span style={{ fontSize: 12, color: C.sub }}>{sp.category}</span>
+                </div>
+                {sp.area && <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{sp.area}</div>}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                  <span style={{ fontSize: 12.5, color: C.sub }}>{st.hours ? `本日 ${st.hours}` : closedText(sp)}</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <a href={mapUrl(sp)} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 5, background: C.skySoft, color: C.sky, borderRadius: 9, padding: "7px 11px", fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}><GoogleMapsIcon size={14} /> 地図</a>
+                    {igUrl(sp) && <a href={igUrl(sp)} target="_blank" rel="noreferrer" aria-label="公式Instagram" style={{ display: "flex", alignItems: "center", background: C.bg, borderRadius: 9, padding: "7px 10px", textDecoration: "none" }}><InstagramIcon size={15} /></a>}
+                    <button onClick={() => onGo(sp)} style={{ background: C.openSoft, color: C.open, border: "none", borderRadius: 9, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>行ったら記録</button>
+                  </div>
+                </div>
+                {sp.memo && <div style={{ fontSize: 12.5, color: "#5a6b62", marginTop: 8, lineHeight: 1.6, background: C.bg, borderRadius: 9, padding: "7px 10px" }}>📝 {sp.memo}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Chip({ active, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{
+      background: active ? C.ink : C.card, color: active ? "#fff" : C.sub,
+      border: `1.5px solid ${active ? C.ink : C.line}`, borderRadius: 999,
+      padding: "7px 13px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Zen Maru Gothic'",
+    }}>{children}</button>
+  );
+}
+
+// ============ Spots ============
+function SpotsView({ spots, holidayMode, onAdd, onEdit, onDelete, onToggleFav, recordsCount }) {
+  return (
+    <div>
+      <button onClick={onAdd} style={{ width: "100%", background: C.card, color: C.ink, border: `1.5px dashed ${C.sun}`, borderRadius: 14, padding: "13px", fontFamily: "'Zen Maru Gothic'", fontWeight: 800, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>＋ スポットを追加</button>
+
+      {spots.length === 0 ? (
+        <Empty icon="🏞" title="リストはまだ空っぽ" body="よく行く・行ってみたい場所を追加しましょう。営業時間と定休日を入れておくと、当日の判定に使えます。" />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {spots.map((sp) => {
+            const st = spotStatus(sp, holidayMode);
+            const rc = recordsCount(sp.id);
+            return (
+              <div key={sp.id} style={{ background: C.card, borderRadius: 16, border: `1.5px solid ${C.line}`, overflow: "hidden" }}>
+                <PhotoArea spot={sp} height={150} status={st} onToggleFav={onToggleFav} showEnv />
+                <div style={{ padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 700, fontSize: 16.5 }}>{sp.name}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, color: C.sub }}>{sp.category}</span>
+                    {sp.area && <span style={{ fontSize: 12, color: C.sub }}>· {sp.area}</span>}
+                    <span style={{ fontSize: 11, color: C.sub, background: C.bg, borderRadius: 6, padding: "2px 7px" }}>{sp.age}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.sub, marginTop: 8 }}>🕒 平日 {sp.hours?.mon?.open}〜{sp.hours?.mon?.close}</div>
+                  <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3 }}>🚫 {closedText(sp)}</div>
+                  {sp.address && <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3 }}>📍 {sp.address}</div>}
+                  {sp.tel && <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3 }}>☎ {sp.tel}</div>}
+                  {sp.memo && <div style={{ fontSize: 12.5, color: "#5a6b62", marginTop: 6, lineHeight: 1.6 }}>📝 {sp.memo}</div>}
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+                    <a href={mapUrl(sp)} target="_blank" rel="noreferrer" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, textAlign: "center", background: C.skySoft, color: C.sky, borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 700, textDecoration: "none" }}><GoogleMapsIcon size={15} /> Googleマップ</a>
+                    {igUrl(sp) && <a href={igUrl(sp)} target="_blank" rel="noreferrer" aria-label="公式Instagram" style={{ flex: "0 0 auto", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, borderRadius: 9, padding: "9px 12px", textDecoration: "none" }}><InstagramIcon size={16} /></a>}
+                    <button onClick={() => onEdit(sp)} style={{ flex: 1, background: C.bg, color: C.ink, border: "none", borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>編集</button>
+                    {sp.url && <a href={sp.url} target="_blank" rel="noreferrer" style={{ flex: 1, textAlign: "center", background: C.leafSoft, color: C.leaf, borderRadius: 9, padding: "9px", fontSize: 13, fontWeight: 700, textDecoration: "none" }}>公式</a>}
+                    <button onClick={() => onDelete(sp.id)} style={{ background: "none", color: C.closed, border: "none", padding: "9px 8px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>削除</button>
+                  </div>
+                  {rc > 0 && <div style={{ fontSize: 11.5, color: C.sub, marginTop: 8, textAlign: "right" }}>これまで {rc} 回おでかけ</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ Spot editor ============
+function SpotEditor({ init, onClose, onSave }) {
+  const [f, setF] = useState(init);
+  const fileRef = useRef();
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const setHour = (d, k, v) => setF((p) => ({ ...p, hours: { ...p.hours, [d]: { ...p.hours[d], [k]: v } } }));
+
+  const copyMonToWeekday = () => {
+    const base = f.hours.mon;
+    setF((p) => ({ ...p, hours: { ...p.hours, tue: { ...base }, wed: { ...base }, thu: { ...base }, fri: { ...base } } }));
+  };
+
+  const pickPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const d = await compressImage(file);
+    if (d) set("photo", d);
+  };
+
+  const valid = f.name.trim().length > 0;
+
+  return (
+    <Sheet title={init.id ? "スポットを編集" : "スポットを追加"} onClose={onClose}
+      footer={<button disabled={!valid} onClick={() => onSave({ ...f, name: f.name.trim() })} style={{ width: "100%", background: valid ? C.sun : "#E6E0D2", color: valid ? "#3a2a07" : "#aaa", border: "none", borderRadius: 12, padding: "13px", fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 15.5, cursor: valid ? "pointer" : "default" }}>保存する</button>}
+    >
+      <Field label="名前">
+        <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="例）大濠公園" style={inp} />
+      </Field>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="ジャンル" flex>
+          <select value={f.category} onChange={(e) => set("category", e.target.value)} style={inp}>
+            {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="対象年齢" flex>
+          <select value={f.age} onChange={(e) => set("age", e.target.value)} style={inp}>
+            {AGES.map((a) => <option key={a}>{a}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <Field label="室内 / 屋外">
+        <div style={{ display: "flex", gap: 8 }}>
+          {ENV_OPTS.map((o) => (
+            <button key={o.key} onClick={() => set("env", o.key)} style={{
+              flex: 1, background: f.env === o.key ? o.soft : C.card, color: f.env === o.key ? o.color : C.sub,
+              border: `1.5px solid ${f.env === o.key ? o.color : C.line}`, borderRadius: 10, padding: "10px", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+            }}>{o.label}</button>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="エリア・最寄り（任意）">
+        <input value={f.area} onChange={(e) => set("area", e.target.value)} placeholder="例）中央区 / 大濠公園駅" style={inp} />
+      </Field>
+
+      <Field label="住所（任意・地図に使われます）">
+        <input value={f.address || ""} onChange={(e) => set("address", e.target.value)} placeholder="例）福岡市中央区大濠公園1-2" style={inp} />
+      </Field>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="電話（任意）" flex>
+          <input value={f.tel || ""} onChange={(e) => set("tel", e.target.value)} placeholder="092-..." style={inp} />
+        </Field>
+        <Field label="地図URL（任意）" flex>
+          <input value={f.mapUrl || ""} onChange={(e) => set("mapUrl", e.target.value)} placeholder="空欄で自動" style={inp} />
+        </Field>
+      </div>
+
+      {/* hours */}
+      <div style={{ marginTop: 4, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink, fontFamily: "'Zen Maru Gothic'" }}>営業時間・定休日</span>
+        <button onClick={copyMonToWeekday} style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: "5px 9px", fontSize: 11.5, color: C.sub, cursor: "pointer" }}>月→平日にコピー</button>
+      </div>
+      <div style={{ background: C.bg, borderRadius: 12, padding: "6px 10px", marginBottom: 14 }}>
+        {DOW_ORDER.map((d) => {
+          const slot = f.hours[d];
+          return (
+            <div key={d} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: d === "hol" ? "none" : `1px solid ${C.line}` }}>
+              <span style={{ width: 22, fontWeight: 700, fontSize: 14, color: d === "sun" ? C.closed : d === "sat" || d === "hol" ? C.sky : C.ink }}>{DOW_LABEL[d]}</span>
+              <button onClick={() => setHour(d, "closed", !slot.closed)} style={{
+                background: slot.closed ? C.closedSoft : C.openSoft, color: slot.closed ? C.closed : C.open,
+                border: "none", borderRadius: 7, padding: "5px 9px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", width: 52,
+              }}>{slot.closed ? "休み" : "営業"}</button>
+              {!slot.closed && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flex: 1 }}>
+                  <input type="time" value={slot.open} onChange={(e) => setHour(d, "open", e.target.value)} style={timeInp} />
+                  <span style={{ color: C.sub }}>〜</span>
+                  <input type="time" value={slot.close} onChange={(e) => setHour(d, "close", e.target.value)} style={timeInp} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <Field label="その他の定休日メモ（任意・第3日曜/お盆など）">
+        <input value={f.closedNote || ""} onChange={(e) => set("closedNote", e.target.value)} placeholder="例）第3日曜・お盆・年末年始" style={inp} />
+      </Field>
+
+      <Field label="メモ（駐車場・授乳室・持ち物など 任意）">
+        <textarea value={f.memo} onChange={(e) => set("memo", e.target.value)} rows={2} placeholder="例）駐車場あり / ベビーカーOK / 屋根あり" style={{ ...inp, resize: "vertical" }} />
+      </Field>
+
+      <Field label="公式サイトURL（任意）">
+        <input value={f.url} onChange={(e) => set("url", e.target.value)} placeholder="https://" style={inp} />
+      </Field>
+
+      <Field label="公式Instagram（任意・@なしのユーザー名）">
+        <input value={f.instagram || ""} onChange={(e) => set("instagram", e.target.value.trim())} placeholder="例）fukuokatoymuseum" style={inp} />
+      </Field>
+
+      <Field label="写真（任意）">
+        <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto} style={{ display: "none" }} />
+        {f.photo ? (
+          <div style={{ position: "relative" }}>
+            <img src={f.photo} alt="" style={{ width: "100%", height: 150, objectFit: "cover", borderRadius: 10 }} />
+            <button onClick={() => set("photo", null)} style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,.55)", color: "#fff", border: "none", borderRadius: 999, width: 28, height: 28, cursor: "pointer" }}>×</button>
+          </div>
+        ) : (
+          <button onClick={() => fileRef.current?.click()} style={{ width: "100%", background: C.card, border: `1.5px dashed ${C.line}`, borderRadius: 10, padding: "16px", color: C.sub, fontSize: 13.5, cursor: "pointer" }}>📷 写真を選ぶ</button>
+        )}
+      </Field>
+    </Sheet>
+  );
+}
+
+// ============ Records ============
+function RecordsView({ records, spots, onAdd, onDelete }) {
+  const [open, setOpen] = useState(null);
+  const sorted = [...records].sort((a, b) => b.date.localeCompare(a.date));
+  return (
+    <div>
+      <button onClick={onAdd} style={{ width: "100%", background: C.card, color: C.ink, border: `1.5px dashed ${C.open}`, borderRadius: 14, padding: "13px", fontFamily: "'Zen Maru Gothic'", fontWeight: 800, fontSize: 15, cursor: "pointer", marginBottom: 14 }}>＋ おでかけを記録</button>
+
+      {sorted.length === 0 ? (
+        <Empty icon="📷" title="記録はまだありません" body="行った日・点数・ひとことを残しておくと、あとで見返せます。「きょう」タブの『行ったら記録』からも追加できます。" />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {sorted.map((r) => {
+            const isOpen = open === r.id;
+            const linkedSpot = spots.find((s) => s.id === r.spotId) || { category: "その他" };
+            return (
+              <div key={r.id} onClick={() => setOpen(isOpen ? null : r.id)} style={{ background: C.card, borderRadius: 16, border: `1.5px solid ${C.line}`, overflow: "hidden", cursor: "pointer" }}>
+                {r.photo ? (
+                  <div style={{ position: "relative" }}>
+                    <img src={r.photo} alt={r.name} style={{ width: "100%", height: isOpen ? "auto" : 160, objectFit: "cover", display: "block" }} />
+                    <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(255,255,255,.92)", borderRadius: 999, padding: "4px 9px", boxShadow: "0 1px 4px rgba(36,51,44,.18)" }}><Stars value={r.rating} size={13} /></div>
+                  </div>
+                ) : (
+                  <PhotoArea spot={{ name: r.name, category: linkedSpot.category }} height={100} />
+                )}
+                <div style={{ padding: "12px 15px 14px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                    <div>
+                      <div style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 700, fontSize: 16.5 }}>{r.name}</div>
+                      <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{fmtDate(r.date)}</div>
+                    </div>
+                    {!r.photo && <Stars value={r.rating} size={15} />}
+                  </div>
+                  {r.comment && (
+                    <div style={{ fontSize: 13.5, marginTop: 8, lineHeight: 1.7, color: "#4f5e56", display: isOpen ? "block" : "-webkit-box", WebkitLineClamp: isOpen ? "none" : 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.comment}</div>
+                  )}
+                  {isOpen && (
+                    <button onClick={(e) => { e.stopPropagation(); onDelete(r.id); }} style={{ marginTop: 10, background: "none", border: "none", color: C.closed, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0 }}>削除する</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ Record editor ============
+function RecordEditor({ init, spots, onClose, onSave }) {
+  const [f, setF] = useState(init);
+  const fileRef = useRef();
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+
+  const onSpot = (id) => {
+    const sp = spots.find((s) => s.id === id);
+    setF((p) => ({ ...p, spotId: id, name: sp ? sp.name : p.name }));
+  };
+  const pickPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const d = await compressImage(file, 1000, 0.6);
+    if (d) set("photo", d);
+  };
+  const valid = (f.name || "").trim().length > 0;
+
+  return (
+    <Sheet title="おでかけを記録" onClose={onClose}
+      footer={<button disabled={!valid} onClick={() => onSave({ ...f, name: f.name.trim() })} style={{ width: "100%", background: valid ? C.open : "#D5E2D9", color: "#fff", border: "none", borderRadius: 12, padding: "13px", fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 15.5, cursor: valid ? "pointer" : "default" }}>記録する</button>}
+    >
+      <Field label="どこに行った？">
+        {spots.length > 0 ? (
+          <select value={f.spotId || ""} onChange={(e) => { if (e.target.value === "__free") { set("spotId", ""); } else onSpot(e.target.value); }} style={inp}>
+            {spots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="__free">▼ リストにない場所を入力</option>
+          </select>
+        ) : null}
+        {(!f.spotId || spots.length === 0) && (
+          <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="場所の名前" style={{ ...inp, marginTop: spots.length ? 8 : 0 }} />
+        )}
+      </Field>
+
+      <Field label="行った日">
+        <input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} style={inp} />
+      </Field>
+
+      <Field label="楽しさ採点">
+        <Stars value={f.rating} size={30} onChange={(n) => set("rating", n)} />
+      </Field>
+
+      <Field label="ひとこと（任意）">
+        <textarea value={f.comment} onChange={(e) => set("comment", e.target.value)} rows={3} placeholder="例）芝生が広くて走り回れた。トイレがきれい。" style={{ ...inp, resize: "vertical" }} />
+      </Field>
+
+      <Field label="写真（任意）">
+        <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto} style={{ display: "none" }} />
+        {f.photo ? (
+          <div style={{ position: "relative" }}>
+            <img src={f.photo} alt="" style={{ width: "100%", height: 170, objectFit: "cover", borderRadius: 10 }} />
+            <button onClick={() => set("photo", null)} style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,.55)", color: "#fff", border: "none", borderRadius: 999, width: 28, height: 28, cursor: "pointer" }}>×</button>
+          </div>
+        ) : (
+          <button onClick={() => fileRef.current?.click()} style={{ width: "100%", background: C.card, border: `1.5px dashed ${C.line}`, borderRadius: 10, padding: "16px", color: C.sub, fontSize: 13.5, cursor: "pointer" }}>📷 写真を選ぶ</button>
+        )}
+      </Field>
+    </Sheet>
+  );
+}
+
+// ============ shared sheet / field ============
+function Sheet({ title, onClose, children, footer }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(20,30,25,.45)", zIndex: 50, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, width: "100%", maxWidth: 480, maxHeight: "94vh", borderRadius: "20px 20px 0 0", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "16px 18px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.line}`, background: C.card }}>
+          <span style={{ fontFamily: "'Zen Maru Gothic'", fontWeight: 900, fontSize: 17 }}>{title}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: C.sub, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: "14px 18px", overflowY: "auto", flex: 1 }}>{children}</div>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.line}`, background: C.card }}>{footer}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children, flex }) {
+  return (
+    <div style={{ marginBottom: 14, flex: flex ? 1 : undefined }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, marginBottom: 6, fontFamily: "'Zen Maru Gothic'" }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+const inp = {
+  width: "100%", background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 10,
+  padding: "11px 12px", fontSize: 14.5, color: C.ink, outline: "none",
+};
+const timeInp = { background: C.card, border: `1.5px solid ${C.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 13.5, color: C.ink, outline: "none" };
+
+const __root = ReactDOM.createRoot(document.getElementById("root"));
+__root.render(<App />);
+
+</script>
+</body>
+</html>
